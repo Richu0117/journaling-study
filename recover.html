@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>数据找回 · Data recovery</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:#FBF3E1; color:#2E2620; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:520px; margin:0 auto; padding:24px 18px 60px; }
+  h1 { font-size:24px; margin:6px 0 14px; }
+  .card { background:#FFFCF5; border:2.5px solid #2E2620; border-radius:18px; padding:18px; margin:14px 0; box-shadow:4px 4px 0 #E9D4A6; }
+  .big { font-size:20px; font-weight:800; }
+  .muted { color:#6E6455; font-size:14px; line-height:1.6; }
+  button { display:block; width:100%; margin:12px 0 0; padding:16px; font-size:17px; font-weight:800; border:2.5px solid #2E2620; border-radius:14px; cursor:pointer; box-shadow:3px 3px 0 #2E2620; }
+  .primary { background:#F27A5B; color:#FFFCF5; }
+  .second { background:#FBF3E1; color:#2E2620; }
+  .ok { color:#2e7d32; } .bad { color:#c0392b; }
+  .row { margin:6px 0; font-size:16px; }
+  .num { font-weight:800; font-size:20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔎 数据找回 · Data recovery</h1>
+  <div id="status" class="card"><span class="big">读取中… Loading…</span></div>
+  <div id="actions"></div>
+  <div class="card muted">
+    这个页面<strong>只读取、不修改</strong>你的任何数据，也不会上传到任何地方。<br>
+    请点上面的按钮把文件下载下来，<strong>发给研究者</strong>即可。<br><br>
+    This page only <strong>reads</strong> your data — it changes nothing and uploads nothing.
+    Tap the button, download the file, and send it to your researcher.
+  </div>
+</div>
+<script>
+(async function(){
+  var statusEl = document.getElementById('status');
+  var actionsEl = document.getElementById('actions');
+
+  // ---- 1. Read everything in localStorage (read-only) ----
+  var ls = {};
+  try { for (var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); ls[k]=localStorage.getItem(k); } } catch(e){}
+
+  // ---- 2. Read the voice/doodle audio+image store from IndexedDB (read-only) ----
+  var media = {};
+  function blobToDataUrl(b){ return new Promise(function(res){ if(!b){res('');return;} if(typeof b==='string'){res(b);return;} try{ var fr=new FileReader(); fr.onload=function(){res(fr.result);}; fr.onerror=function(){res('');}; fr.readAsDataURL(b);}catch(e){res('');} }); }
+  async function readIdb(){
+    return new Promise(function(resolve){
+      var req;
+      try { req = indexedDB.open('aj2_audio', 1); } catch(e){ resolve(); return; }
+      req.onupgradeneeded = function(){ try{ var db=req.result; if(!db.objectStoreNames.contains('clips')) db.createObjectStore('clips'); }catch(e){} };
+      req.onerror = function(){ resolve(); };
+      req.onsuccess = async function(){
+        var db = req.result, store;
+        try { store = db.transaction('clips','readonly').objectStore('clips'); } catch(e){ resolve(); return; }
+        try {
+          var keys = await new Promise(function(r){ var q=store.getAllKeys(); q.onsuccess=function(){r(q.result||[]);}; q.onerror=function(){r([]);}; });
+          var vals = await new Promise(function(r){ var q=store.getAll(); q.onsuccess=function(){r(q.result||[]);}; q.onerror=function(){r([]);}; });
+          for (var j=0;j<keys.length;j++){ media[keys[j]] = await blobToDataUrl(vals[j]); }
+        } catch(e){}
+        resolve();
+      };
+    });
+  }
+  try { await readIdb(); } catch(e){}
+
+  // ---- 3. Summarise ----
+  var entries=[], metas=[], reviews=[];
+  try { entries = JSON.parse(ls['aj2_entries']||'[]'); } catch(e){}
+  try { metas   = JSON.parse(ls['aj2_meta']||'[]'); } catch(e){}
+  try { reviews = JSON.parse(ls['aj2_reviews']||'[]'); } catch(e){}
+  var pid = ls['aj2_pid'] || '(未设置 / none)';
+  var mediaCount = Object.keys(media).length;
+  var found = (entries.length + metas.length + mediaCount) > 0;
+
+  statusEl.innerHTML =
+    '<div class="row">参与者 ID / Participant: <span class="num">'+ String(pid).replace(/[<>&]/g,'') +'</span></div>' +
+    '<div class="row">📓 日记条目 entries: <span class="num '+(entries.length?'ok':'bad')+'">'+entries.length+'</span></div>' +
+    '<div class="row">📊 元数据行 metadata rows: <span class="num '+(metas.length?'ok':'bad')+'">'+metas.length+'</span></div>' +
+    '<div class="row">🎙️ 语音/涂鸦 media: <span class="num">'+mediaCount+'</span></div>' +
+    '<div class="row" style="margin-top:12px;font-weight:800;">'+
+      (found ? '<span class="ok">✅ 找到数据了！请点下面下载并发给研究者。<br>Data found — download it below.</span>'
+             : '<span class="bad">未在这台设备/这个浏览器找到数据。<br>No data found in this browser.</span>') +
+    '</div>';
+
+  // ---- 4. Build downloads ----
+  var payload = { recoveredAt:new Date().toISOString(), participantId:pid, localStorage:ls, media:media };
+  var fullJson = JSON.stringify(payload);
+
+  function toCSV(rows){ if(!rows||!rows.length) return ''; var hs=[]; rows.forEach(function(r){ Object.keys(r).forEach(function(k){ if(hs.indexOf(k)<0) hs.push(k); }); }); var esc=function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; }; var lines=[hs.join(',')]; rows.forEach(function(r){ lines.push(hs.map(function(k){return esc(r[k]);}).join(',')); }); return lines.join('\n'); }
+  var metaCsv = toCSV(metas);
+
+  function download(name, text, mime){ try{ var blob=new Blob([text],{type:mime}); var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(function(){ a.remove(); },500); }catch(e){ alert('下载失败，请截图本页发给研究者。'); } }
+
+  if (found){
+    var b1=document.createElement('button'); b1.className='primary'; b1.innerHTML='⬇️ 下载全部数据（发给研究者）<br>Download ALL my data';
+    b1.onclick=function(){ download('recovery_'+String(pid).replace(/[^\w-]/g,'')+'.json', fullJson, 'application/json'); };
+    actionsEl.appendChild(b1);
+    var b2=document.createElement('button'); b2.className='second'; b2.textContent='下载元数据 CSV / metadata CSV';
+    b2.onclick=function(){ download('metadata_'+String(pid).replace(/[^\w-]/g,'')+'.csv', metaCsv, 'text/csv;charset=utf-8'); };
+    actionsEl.appendChild(b2);
+  }
+})();
+</script>
+</body>
+</html>
